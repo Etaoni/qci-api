@@ -21,9 +21,12 @@ TODO:
 import requests
 import os
 import xmltodict
+import tempfile
+import sys
 
 from datetime import datetime
 from urllib.parse import urljoin
+from multiprocessing.pool import ThreadPool
 
 from qci.classes import DataPackage
 
@@ -47,20 +50,30 @@ def get_access_token(client_id, client_secret):
     return resp.json()['access_token']
 
 
-def upload_datapackage(access_token, datapackage_zip):
-    """ TODO: pull from database and zip all files
-    :param access_token: access token from get_access_token()
-    :param datapackage_zip: QCI datapackage, example: https://developers.ingenuity.com/doc/clinical/Example__Somatic_Cancer_Diagnostic_Test.jsp#Example%3A_Somatic_Cancer_Metadata_Input_XML_File
+def validate_datapackage(datapackage):
+    if not isinstance(datapackage, DataPackage):
+        raise ValueError('DataPackage failed validation (not a DataPackage): {}'.format(datapackage))
+
+
+def upload_datapackage(datapackage):
+    """
+    :param datapackage: qci.classes.DataPackage object
     :return:
     """
     api_url = urljoin(BASE_URL, '/v1/datapackages')
-    headers = {
-        'Authorization': 'Bearer {}'.format(access_token)
-    }
-    files = {
-        'file': open(datapackage_zip, 'rb')
-    }
 
+    # Validate the datapackage
+    validate_datapackage(datapackage)
+
+    # Securely generate the datapackage XML and write it to a file
+    datapackage_fd, datapackage_file_path = tempfile.mkstemp(prefix='QCI_DP_', suffix='.zip')
+    datapackage_fd.write(datapackage.to_xml())
+
+    # POST the datapackage to QCI
+    headers = {
+        'Authorization': 'Bearer {}'.format(datapackage.access_token)
+    }
+    files = {'file': datapackage_fd.read()}
     resp = requests.post(api_url, headers=headers, files=files)
     """Example Response:
     {
@@ -80,38 +93,20 @@ def upload_datapackage(access_token, datapackage_zip):
     return resp.json()
 
 
-def upload_datapackages(access_token, datapackage_zips):
+def upload_datapackages(datapackages, debug=True):
     """
-    Multithreaded
-    :param access_token: access token from get_access_token()
-    :param datapackage_zips: list( DataPackage ), example XML: https://developers.ingenuity.com/doc/clinical/Example__Somatic_Cancer_Diagnostic_Test.jsp#Example%3A_Somatic_Cancer_Metadata_Input_XML_File
+    :param datapackages: list( DataPackage ), example XML: https://developers.ingenuity.com/doc/clinical/Example__Somatic_Cancer_Diagnostic_Test.jsp#Example%3A_Somatic_Cancer_Metadata_Input_XML_File
+    :param debug: set to True to receive debugging messages (tracebacks)
     :return:
     """
-    api_url = urljoin(BASE_URL, '/v1/datapackages')
-    headers = {
-        'Authorization': 'Bearer {}'.format(access_token)
-    }
-    files = {
-        'file': open(datapackage_zip, 'rb')
-    }
+    if not debug:
+        sys.tracebacklimit = 0  # Only show tracebacks when debugging
 
-    resp = requests.post(api_url, headers=headers, files=files)
-    """Example Response:
-    {
-      "method": "partner integration",
-      "creator": "user1@domain.com",
-      "users": ["user2@domain.com"],
-      "title": "DM-121212 Cancer Hotspot Panel",
-      "analysis-name": "DM-121212",
-      "status": "PREPROCESSING",
-      "stage": "Validating",
-      "results-url": "https://api.ingenuity.com/datastream/analysisStatus.jsp?packageId=DP_727658804867835145738",
-      "status-url": "https://api.ingenuity.com/v1/datapackages/DP_727658804867835145738",
-      "pipeline-name": "QCI Somatic Cancer Pipeline",
-      "percentage-complete": 20
-    }
-    """
-    return resp.json()
+    # POST all of the datapackages
+    qci_upload_pool = ThreadPool()
+    qci_upload_pool.map(upload_datapackage, datapackages)
+    qci_upload_pool.close()
+    qci_upload_pool.join()
 
 
 def check_submission_status(access_token, qci_id):
@@ -298,10 +293,6 @@ def get_test_product_profiles(access_token):
     return resp.json()
 
 
-def multithread_api_call():
-    pass
-
-
 if __name__ == '__main__':
     # TODO: move these to examples/
     import json
@@ -314,3 +305,10 @@ if __name__ == '__main__':
     # print(get_test_result_xml(auth_token, '1807270053-COtA2682'))
     # print(list_tests(auth_token))
     print(list_tests(auth_token))
+
+    # You would normally pull data from yous database here
+    example_data_package = DataPackage(
+        access_token=auth_token,
+        primary_id='COtGx1234'
+    )
+    upload_datapackage(example_data_package)

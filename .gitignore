@@ -1,4 +1,6 @@
 .qci/qci_credentials.json
-./dist
-./build
+./dist/
+./build/
+./qci_api.egg-info/
 ./*.sh
+./Pipfile*
